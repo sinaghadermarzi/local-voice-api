@@ -5,6 +5,7 @@ services:
       - "8000:8000"
     volumes:
       - hf-cache:/cache/huggingface
+    gpus: all
     restart: unless-stopped
 
 volumes:

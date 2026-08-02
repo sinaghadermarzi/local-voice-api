@@ -9,9 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# CPU-only torch keeps the image several GB smaller than the default CUDA build
+# Default PyPI torch bundles CUDA 12 userspace libs; the driver comes from
+# Docker's GPU passthrough at runtime. Falls back to CPU if no GPU is exposed.
 COPY requirements.txt .
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --no-cache-dir torch \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app

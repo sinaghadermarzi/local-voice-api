@@ -7,6 +7,7 @@ import threading
 
 import numpy as np
 import soundfile as sf
+import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from kokoro import KPipeline
@@ -16,6 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice-api")
 
 SAMPLE_RATE = 24000
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # English-only voice set. The first letter of a voice name selects the
 # pipeline language: a=American English, b=British English.
@@ -58,8 +60,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 def get_pipeline(lang_code: str) -> KPipeline:
     with _lock:
         if lang_code not in _pipelines:
-            logger.info("Loading Kokoro pipeline for lang_code=%s", lang_code)
-            _pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M")
+            logger.info("Loading Kokoro pipeline for lang_code=%s on %s", lang_code, DEVICE)
+            _pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=DEVICE)
         return _pipelines[lang_code]
 
 
@@ -75,7 +77,7 @@ def synthesize(text: str, voice: str, speed: float) -> np.ndarray:
         pipeline = get_pipeline(voice[0])
         chunks = []
         for _, _, audio in pipeline(text, voice=voice, speed=speed):
-            chunks.append(audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio))
+            chunks.append(audio.detach().cpu().numpy() if torch.is_tensor(audio) else np.asarray(audio))
     except Exception as exc:
         logger.exception("Synthesis failed for voice=%s", voice)
         raise HTTPException(
@@ -106,7 +108,7 @@ def transcode(wav_bytes: bytes, ffmpeg_args: list[str]) -> bytes:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "loaded_languages": sorted(_pipelines)}
+    return {"status": "ok", "device": DEVICE, "loaded_languages": sorted(_pipelines)}
 
 
 @app.get("/v1/voices")
