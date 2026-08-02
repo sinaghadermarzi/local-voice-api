@@ -1,0 +1,11 @@
+services:
+  voice-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
