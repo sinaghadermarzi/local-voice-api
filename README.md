@@ -21,9 +21,11 @@ Request body:
 | `input`           | string | (required) | Text to synthesize           |
 | `voice`           | string | `af_heart` | See `/v1/voices`             |
 | `speed`           | float  | `1.0`      | 0.5–2.0                      |
-| `response_format` | string | `wav`      | `wav` or `mp3`               |
+| `response_format` | string | `wav`      | `wav`, `mp3`, or `opus`      |
 
-Returns raw audio bytes (`audio/wav` or `audio/mpeg`).
+Returns raw audio bytes (`audio/wav`, `audio/mpeg`, or `audio/ogg`). The `opus`
+format is Opus in an OGG container (32 kbps VBR) — suitable for Telegram voice
+messages as-is. All errors are JSON: `{"detail": "<reason>"}`.
 
 ```bash
 curl -s http://localhost:8000/v1/audio/speech \
@@ -34,7 +36,8 @@ curl -s http://localhost:8000/v1/audio/speech \
 
 ### `GET /v1/voices`
 
-Lists available voices grouped by language (American/British English, Spanish, French, Hindi, Italian, Japanese, Portuguese, Mandarin).
+Lists available voices: 28 English voices (20 American, 8 British). Non-English
+Kokoro voices are intentionally excluded.
 
 ### `GET /health`
 

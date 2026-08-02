@@ -7,8 +7,8 @@ import threading
 
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from kokoro import KPipeline
 from pydantic import BaseModel, Field
 
@@ -17,8 +17,8 @@ logger = logging.getLogger("voice-api")
 
 SAMPLE_RATE = 24000
 
-# Known Kokoro v1.0 voices, grouped by language. The first letter of a voice
-# name selects the pipeline language: a=American, b=British English, etc.
+# English-only voice set. The first letter of a voice name selects the
+# pipeline language: a=American English, b=British English.
 VOICES = {
     "American English": [
         "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica",
@@ -30,23 +30,29 @@ VOICES = {
         "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
         "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
     ],
-    "Spanish": ["ef_dora", "em_alex", "em_santa"],
-    "French": ["ff_siwis"],
-    "Hindi": ["hf_alpha", "hf_beta", "hm_omega", "hm_psi"],
-    "Italian": ["if_sara", "im_nicola"],
-    "Japanese": ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tenkoro", "jm_kumo"],
-    "Brazilian Portuguese": ["pf_dora", "pm_alex", "pm_santa"],
-    "Mandarin Chinese": [
-        "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
-        "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
-    ],
 }
 ALL_VOICES = {v for group in VOICES.values() for v in group}
 
-app = FastAPI(title="Local Voice API", version="0.1.0")
+# (media type, extra ffmpeg args) per response format; wav needs no transcode
+FORMATS = {
+    "wav": ("audio/wav", None),
+    "mp3": ("audio/mpeg", ["-f", "mp3", "-b:a", "128k"]),
+    "opus": ("audio/ogg", ["-f", "ogg", "-c:a", "libopus", "-b:a", "32k", "-vbr", "on"]),
+}
+
+app = FastAPI(title="Local Voice API", version="0.2.0")
 
 _pipelines: dict[str, KPipeline] = {}
 _lock = threading.Lock()
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Synthesis failed: {type(exc).__name__}: {exc}"},
+    )
 
 
 def get_pipeline(lang_code: str) -> KPipeline:
@@ -61,14 +67,21 @@ class SpeechRequest(BaseModel):
     input: str = Field(..., min_length=1, max_length=20000, description="Text to synthesize")
     voice: str = Field("af_heart", description="Voice name, e.g. af_heart")
     speed: float = Field(1.0, ge=0.5, le=2.0, description="Playback speed multiplier")
-    response_format: str = Field("wav", description="Audio format: wav or mp3")
+    response_format: str = Field("wav", description="Audio format: wav, mp3, or opus (Opus in an OGG container)")
 
 
 def synthesize(text: str, voice: str, speed: float) -> np.ndarray:
-    pipeline = get_pipeline(voice[0])
-    chunks = []
-    for _, _, audio in pipeline(text, voice=voice, speed=speed):
-        chunks.append(audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio))
+    try:
+        pipeline = get_pipeline(voice[0])
+        chunks = []
+        for _, _, audio in pipeline(text, voice=voice, speed=speed):
+            chunks.append(audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio))
+    except Exception as exc:
+        logger.exception("Synthesis failed for voice=%s", voice)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Synthesis failed for voice '{voice}': {type(exc).__name__}: {exc}",
+        )
     if not chunks:
         raise HTTPException(status_code=422, detail="No audio produced for the given input")
     return np.concatenate(chunks)
@@ -80,9 +93,9 @@ def to_wav(audio: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def wav_to_mp3(wav_bytes: bytes) -> bytes:
+def transcode(wav_bytes: bytes, ffmpeg_args: list[str]) -> bytes:
     proc = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-f", "mp3", "-b:a", "128k", "pipe:1"],
+        ["ffmpeg", "-loglevel", "error", "-i", "pipe:0", *ffmpeg_args, "pipe:1"],
         input=wav_bytes,
         capture_output=True,
     )
@@ -105,11 +118,11 @@ def list_voices():
 def create_speech(req: SpeechRequest):
     if req.voice not in ALL_VOICES:
         raise HTTPException(status_code=400, detail=f"Unknown voice '{req.voice}'. See /v1/voices.")
-    if req.response_format not in ("wav", "mp3"):
-        raise HTTPException(status_code=400, detail="response_format must be 'wav' or 'mp3'")
+    if req.response_format not in FORMATS:
+        raise HTTPException(status_code=400, detail="response_format must be 'wav', 'mp3', or 'opus'")
 
+    media_type, ffmpeg_args = FORMATS[req.response_format]
     audio = synthesize(req.input, req.voice, req.speed)
     wav = to_wav(audio)
-    if req.response_format == "mp3":
-        return Response(content=wav_to_mp3(wav), media_type="audio/mpeg")
-    return Response(content=wav, media_type="audio/wav")
+    body = wav if ffmpeg_args is None else transcode(wav, ffmpeg_args)
+    return Response(content=body, media_type=media_type)
