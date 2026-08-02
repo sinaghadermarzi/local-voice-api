@@ -39,7 +39,7 @@ ALL_VOICES = {v for group in VOICES.values() for v in group}
 FORMATS = {
     "wav": ("audio/wav", None),
     "mp3": ("audio/mpeg", ["-f", "mp3", "-b:a", "128k"]),
-    "opus": ("audio/ogg", ["-f", "ogg", "-c:a", "libopus", "-b:a", "32k", "-vbr", "on"]),
+    "opus": ("audio/ogg", ["-f", "ogg", "-c:a", "libopus", "-b:a", "48k", "-vbr", "on", "-compression_level", "5"]),
 }
 
 app = FastAPI(title="Local Voice API", version="0.2.0")

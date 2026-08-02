@@ -24,7 +24,7 @@ Request body:
 | `response_format` | string | `wav`      | `wav`, `mp3`, or `opus`      |
 
 Returns raw audio bytes (`audio/wav`, `audio/mpeg`, or `audio/ogg`). The `opus`
-format is Opus in an OGG container (32 kbps VBR) — suitable for Telegram voice
+format is Opus in an OGG container (48 kbps VBR) — suitable for Telegram voice
 messages as-is. All errors are JSON: `{"detail": "<reason>"}`.
 
 ```bash
