@@ -5,6 +5,17 @@ services:
       - "8000:8000"
     volumes:
       - hf-cache:/cache/huggingface
+    environment:
+      - CHATTERBOX_URL=http://chatterbox:8001
+    gpus: all
+    restart: unless-stopped
+
+  # optional second engine; start with: docker compose --profile chatterbox up -d
+  chatterbox:
+    build: services/chatterbox
+    profiles: ["chatterbox"]
+    volumes:
+      - hf-cache:/cache/huggingface
     gpus: all
     restart: unless-stopped
 
