@@ -4,3 +4,7 @@ __pycache__/
 *.mp3
 *.ogg
 samples/
+
+# voice reference clips (personal; keep out of git)
+voices/*
+!voices/README.md

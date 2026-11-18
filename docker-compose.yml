@@ -10,12 +10,16 @@ services:
     gpus: all
     restart: unless-stopped
 
-  # optional second engine; start with: docker compose --profile chatterbox up -d
+  # optional second engine (Chatterbox Turbo); start with: docker compose --profile chatterbox up -d
   chatterbox:
     build: services/chatterbox
     profiles: ["chatterbox"]
+    environment:
+      - CHATTERBOX_VARIANT=turbo  # "standard" loads the slower 0.5B original instead
+      - VOICES_DIR=/voices
     volumes:
       - hf-cache:/cache/huggingface
+      - ./voices:/voices:ro       # reference clips for voice cloning: voices/<name>.wav
     gpus: all
     restart: unless-stopped
 

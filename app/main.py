@@ -1,4 +1,4 @@
-"""Local voice API — text-to-speech server backed by Kokoro."""
+"""Local voice API — text-to-speech gateway: Kokoro in-process, Chatterbox Turbo via its own service."""
 
 import io
 import logging
@@ -21,7 +21,9 @@ logger = logging.getLogger("voice-api")
 SAMPLE_RATE = 24000
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 CHATTERBOX_URL = os.environ.get("CHATTERBOX_URL", "http://chatterbox:8001")
-ENGINES = ("kokoro", "chatterbox")
+ENGINES = ("kokoro", "chatterbox-turbo")
+# "chatterbox" is the old name of the chatterbox-turbo engine; still accepted.
+ENGINE_ALIASES = {"chatterbox": "chatterbox-turbo"}
 
 # English-only voice set. The first letter of a voice name selects the
 # pipeline language: a=American English, b=British English.
@@ -71,12 +73,13 @@ def get_pipeline(lang_code: str) -> KPipeline:
 
 class SpeechRequest(BaseModel):
     input: str = Field(..., min_length=1, max_length=20000, description="Text to synthesize")
-    engine: str = Field("kokoro", description="TTS engine: kokoro (fast, named voices) or chatterbox (more natural prosody; ignores 'voice')")
-    voice: str = Field("af_heart", description="Voice name, e.g. af_heart (kokoro engine only)")
+    engine: str = Field("kokoro", description="TTS engine: kokoro (fast, named voices) or chatterbox-turbo (more natural prosody, cloned voices)")
+    voice: str | None = Field(None, description="kokoro: e.g. af_heart (default). chatterbox-turbo: 'default' or a clip name from /v1/voices")
     speed: float = Field(1.0, ge=0.5, le=2.0, description="Playback speed multiplier")
     response_format: str = Field("wav", description="Audio format: wav, mp3, or opus (Opus in an OGG container)")
-    exaggeration: float = Field(0.5, ge=0.0, le=2.0, description="Chatterbox only: emotion intensity (0.5 = neutral)")
-    cfg_weight: float = Field(0.5, ge=0.0, le=1.0, description="Chatterbox only: pacing/adherence control")
+    exaggeration: float = Field(0.5, ge=0.0, le=2.0, description="Standard Chatterbox only (ignored by Turbo): emotion intensity")
+    cfg_weight: float = Field(0.5, ge=0.0, le=1.0, description="Standard Chatterbox only (ignored by Turbo): pacing control")
+    temperature: float = Field(0.8, gt=0.0, le=2.0, description="Chatterbox Turbo: sampling temperature (lower = steadier)")
 
 
 def synthesize(text: str, voice: str, speed: float) -> np.ndarray:
@@ -120,20 +123,22 @@ def synthesize_chatterbox(req: "SpeechRequest") -> bytes:
     try:
         resp = httpx.post(
             f"{CHATTERBOX_URL}/synthesize",
-            json={"input": req.input, "exaggeration": req.exaggeration, "cfg_weight": req.cfg_weight},
+            json={"input": req.input, "voice": req.voice or "default", "exaggeration": req.exaggeration,
+                  "cfg_weight": req.cfg_weight, "temperature": req.temperature},
             timeout=600,
         )
     except httpx.RequestError:
         raise HTTPException(
             status_code=503,
-            detail="Chatterbox engine is not running. Start it with: docker compose --profile chatterbox up -d",
+            detail="Chatterbox Turbo engine is not running. Start it with: docker compose --profile chatterbox up -d",
         )
     if resp.status_code != 200:
         try:
             detail = resp.json().get("detail", resp.text)
         except ValueError:
             detail = resp.text
-        raise HTTPException(status_code=502, detail=f"Chatterbox engine error: {detail}")
+        status = 400 if resp.status_code == 400 else 502
+        raise HTTPException(status_code=status, detail=f"Chatterbox engine error: {detail}")
     return resp.content
 
 
@@ -144,18 +149,25 @@ def health():
 
 @app.get("/v1/voices")
 def list_voices():
-    return {"voices": VOICES}
+    voices = {f"kokoro: {k}": v for k, v in VOICES.items()}
+    try:
+        resp = httpx.get(f"{CHATTERBOX_URL}/voices", timeout=5)
+        voices["chatterbox-turbo"] = resp.json()["voices"]
+    except (httpx.HTTPError, ValueError, KeyError):
+        voices["chatterbox-turbo"] = "engine not running"
+    return {"voices": voices}
 
 
 @app.post("/v1/audio/speech")
 def create_speech(req: SpeechRequest):
+    req.engine = ENGINE_ALIASES.get(req.engine, req.engine)
     if req.engine not in ENGINES:
         raise HTTPException(status_code=400, detail=f"Unknown engine '{req.engine}'. Available: {', '.join(ENGINES)}")
     if req.response_format not in FORMATS:
         raise HTTPException(status_code=400, detail="response_format must be 'wav', 'mp3', or 'opus'")
 
     media_type, ffmpeg_args = FORMATS[req.response_format]
-    if req.engine == "chatterbox":
+    if req.engine == "chatterbox-turbo":
         wav = synthesize_chatterbox(req)
         # chatterbox has no native speed control; apply it in the transcode
         if ffmpeg_args is None and req.speed == 1.0:
@@ -163,6 +175,7 @@ def create_speech(req: SpeechRequest):
         else:
             body = transcode(wav, ffmpeg_args, speed=req.speed)
     else:
+        req.voice = req.voice or "af_heart"
         if req.voice not in ALL_VOICES:
             raise HTTPException(status_code=400, detail=f"Unknown voice '{req.voice}'. See /v1/voices.")
         wav = to_wav(synthesize(req.input, req.voice, req.speed))

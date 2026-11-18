@@ -3,7 +3,10 @@
 A Docker-based text-to-speech API server with two engines:
 
 - **kokoro** (default) — [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M): fast (~0.15 s/sentence on GPU), 28 named English voices
-- **chatterbox** (optional) — [Chatterbox](https://github.com/resemble-ai/chatterbox) 0.5B: more natural prosody, emotion control, single voice
+- **chatterbox-turbo** (optional) — [Chatterbox Turbo](https://huggingface.co/ResembleAI/chatterbox-turbo) 350M:
+  more natural prosody, built-in voice plus zero-shot cloned voices from clips in `voices/`.
+  (`chatterbox` is accepted as an alias. Set `CHATTERBOX_VARIANT=standard` in compose to run the
+  slower original 0.5B model instead.)
 
 ## Quick start
 
@@ -27,15 +30,20 @@ Request body:
 | Field             | Type   | Default      | Notes                                            |
 |-------------------|--------|--------------|--------------------------------------------------|
 | `input`           | string | (required)   | Text to synthesize                               |
-| `engine`          | string | `kokoro`     | `kokoro` or `chatterbox`                         |
-| `voice`           | string | `af_heart`   | Kokoro only; see `/v1/voices`                    |
+| `engine`          | string | `kokoro`     | `kokoro` or `chatterbox-turbo`                   |
+| `voice`           | string | per engine   | kokoro: `af_heart` default; chatterbox-turbo: `default` or a clip name in `voices/` |
 | `speed`           | float  | `1.0`        | 0.5–2.0 (applied via ffmpeg for chatterbox)      |
 | `response_format` | string | `wav`        | `wav`, `mp3`, or `opus`                          |
-| `exaggeration`    | float  | `0.5`        | Chatterbox only: emotion intensity (0.5 neutral) |
-| `cfg_weight`      | float  | `0.5`        | Chatterbox only: pacing/adherence                |
+| `temperature`     | float  | `0.8`        | Chatterbox Turbo: sampling temperature           |
+| `exaggeration`    | float  | `0.5`        | Standard Chatterbox only (Turbo ignores it)      |
+| `cfg_weight`      | float  | `0.5`        | Standard Chatterbox only (Turbo ignores it)      |
 
-If the chatterbox engine isn't running, `engine: "chatterbox"` returns a JSON
-503 explaining how to start it.
+If the Chatterbox Turbo engine isn't running, `engine: "chatterbox-turbo"` returns a JSON
+503 explaining how to start it. Turbo understands paralinguistic tags in the text such as
+`[laugh]`, `[chuckle]` and `[cough]`.
+
+Chatterbox handles one generation at a time (a lock serializes requests). Turbo uses about
+2.9 GB of GPU memory when loaded, and working memory is released after each request.
 
 Returns raw audio bytes (`audio/wav`, `audio/mpeg`, or `audio/ogg`). The `opus`
 format is Opus in an OGG container (48 kbps VBR) — suitable for Telegram voice
@@ -50,8 +58,8 @@ curl -s http://localhost:8000/v1/audio/speech \
 
 ### `GET /v1/voices`
 
-Lists available voices: 28 English voices (20 American, 8 British). Non-English
-Kokoro voices are intentionally excluded.
+Lists available voices: 28 Kokoro English voices (20 American, 8 British; non-English
+excluded) and the Chatterbox Turbo voices (`default` plus clips in `voices/`).
 
 ### `GET /health`
 
